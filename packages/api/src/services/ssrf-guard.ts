@@ -77,6 +77,16 @@ function isPrivateIPv6(ip: string): boolean {
   return false;
 }
 
+export interface IsPrivateAddressOptions {
+  /**
+   * If true, hostnames that fail DNS resolution (ENOTFOUND, ENODATA)
+   * are NOT considered private (safe for RDAP/WHOIS domain-registration lookups
+   * when a domain is parked or has no A/AAAA record configured yet).
+   * Defaults to false for strict TCP connection guarding.
+   */
+  allowUnresolved?: boolean;
+}
+
 /**
  * Check if `host` is a private/loopback/link-local address.
  *
@@ -86,12 +96,14 @@ function isPrivateIPv6(ip: string): boolean {
  *   if any is private, the hostname is considered unsafe. This is what
  *   defeats DNS-rebinding-style attacks where a public name briefly
  *   resolves to a private IP.
- * - Resolution failure (NXDOMAIN, timeout) is treated as UNSAFE — we do
- *   not let an attacker crash the check by serving broken DNS, and we
- *   would rather reject a typo than open a connection to nothing.
+ * - Resolution failure (NXDOMAIN, timeout) is treated as UNSAFE by default
+ *   unless `allowUnresolved: true` is passed (e.g. for domain registration monitoring).
  * - Empty string is unsafe.
  */
-export async function isPrivateAddress(host: string): Promise<boolean> {
+export async function isPrivateAddress(
+  host: string,
+  options: IsPrivateAddressOptions = {}
+): Promise<boolean> {
   if (!host) return true;
 
   // IPv4 literal
@@ -108,14 +120,21 @@ export async function isPrivateAddress(host: string): Promise<boolean> {
   // Hostname: resolve and check every answer.
   try {
     const result = await lookup(host, { all: true });
-    if (result.length === 0) return true;
+    if (result.length === 0) return !options.allowUnresolved;
     for (const addr of result) {
       if (addr.family === 4 && isPrivateIPv4(addr.address)) return true;
       if (addr.family === 6 && isPrivateIPv6(addr.address)) return true;
     }
     return false;
-  } catch {
-    // DNS failure — treat as unsafe. Logging is left to the caller.
+  } catch (err: unknown) {
+    if (options.allowUnresolved) {
+      const code = (err as { code?: string })?.code;
+      if (code === "ENOTFOUND" || code === "ENODATA" || code === "EAI_AGAIN") {
+        return false;
+      }
+    }
+    // DNS failure — treat as unsafe by default. Logging is left to the caller.
     return true;
   }
 }
+

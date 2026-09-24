@@ -248,8 +248,11 @@ export function createDomainsRouter(db: DB = getDb()): Hono<Env> {
     // operator must opt in explicitly. The same guard also runs in the
     // checker so a hostname that flips from public to private later is
     // still caught before we open a TCP connection.
+    // We allowUnresolved here because registered domains may not yet have
+    // an A/AAAA record (e.g. parked, MX-only, or awaiting deployment), but can
+    // still be monitored for domain registration expiry.
     if (process.env.ALLOW_PRIVATE_HOSTS !== "1") {
-      if (await isPrivateAddress(hostname)) {
+      if (await isPrivateAddress(hostname, { allowUnresolved: true })) {
         return c.json(
           {
             error: "Hostname resolves to a private/loopback/link-local address",

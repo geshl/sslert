@@ -32,8 +32,49 @@ const RDAP_TIMEOUT_MS = 8000;
 let _bootstrapCache: { fetchedAt: number; data: RdapBootstrap } | null = null;
 const BOOTSTRAP_TTL_MS = 24 * 60 * 60 * 1000;
 
-function tldOf(hostname: string): string {
-  const parts = hostname.toLowerCase().split(".");
+const MULTIPART_TLDS = new Set([
+  "co.uk", "org.uk", "me.uk", "net.uk", "ltd.uk", "plc.uk",
+  "com.au", "net.au", "org.au", "edu.au", "gov.au",
+  "co.nz", "net.nz", "org.nz",
+  "co.jp", "ne.jp", "or.jp", "ac.jp",
+  "com.br", "net.br", "org.br",
+  "co.za", "net.za", "org.za",
+  "com.tr", "org.tr",
+  "com.mx", "org.mx",
+  "co.il", "org.il",
+  "com.sg", "org.sg",
+  "com.hk", "org.hk",
+  "com.tw", "org.tw",
+]);
+
+/**
+ * Extract the apex/registered domain from a hostname (e.g. "www.example.com" -> "example.com",
+ * "sub.domain.co.uk" -> "domain.co.uk", "example.bg" -> "example.bg").
+ * TLD registries only maintain records for apex domains, so querying RDAP or WHOIS with
+ * subdomains yields 404 or no match.
+ */
+export function apexDomainOf(hostname: string): string {
+  const cleaned = hostname.toLowerCase().trim().replace(/\.$/, "");
+  const parts = cleaned.split(".");
+  if (parts.length <= 2) return cleaned;
+
+  // Check if last two parts form a multi-part TLD (e.g. co.uk)
+  const lastTwo = parts.slice(-2).join(".");
+  if (MULTIPART_TLDS.has(lastTwo)) {
+    return parts.slice(-3).join(".");
+  }
+
+  // Otherwise, take the last two labels (e.g. example.com from sub.example.com)
+  return parts.slice(-2).join(".");
+}
+
+export function tldOf(hostname: string): string {
+  const apex = apexDomainOf(hostname);
+  const parts = apex.toLowerCase().split(".");
+  const lastTwo = parts.slice(-2).join(".");
+  if (MULTIPART_TLDS.has(lastTwo)) {
+    return lastTwo;
+  }
   return parts[parts.length - 1] ?? "";
 }
 
@@ -72,8 +113,18 @@ function rdapEndpointFor(tld: string, bootstrap: RdapBootstrap): string | null {
   for (const [tlds, endpoints] of bootstrap.services) {
     if (tlds.includes(tld)) return endpoints[0] ?? null;
   }
+  // If multi-part (e.g. co.uk), also check the base TLD (e.g. uk)
+  if (tld.includes(".")) {
+    const mainTld = tld.split(".").pop();
+    if (mainTld) {
+      for (const [tlds, endpoints] of bootstrap.services) {
+        if (tlds.includes(mainTld)) return endpoints[0] ?? null;
+      }
+    }
+  }
   return null;
 }
+
 
 function computeDaysRemaining(expiresAt: string): number | null {
   const d = new Date(expiresAt);
@@ -134,13 +185,14 @@ async function lookupRdap(hostname: string): Promise<DomainExpiryResult> {
   if (!bootstrap) {
     return { expiresAt: null, daysRemaining: null, registrar: null, error: "RDAP bootstrap unavailable" };
   }
-  const tld = tldOf(hostname);
+  const apex = apexDomainOf(hostname);
+  const tld = tldOf(apex);
   const endpoint = rdapEndpointFor(tld, bootstrap);
   if (!endpoint) {
     return { expiresAt: null, daysRemaining: null, registrar: null, error: `No RDAP server for .${tld}` };
   }
   try {
-    const url = `${endpoint.replace(/\/$/, "")}/domain/${encodeURIComponent(hostname)}`;
+    const url = `${endpoint.replace(/\/$/, "")}/domain/${encodeURIComponent(apex)}`;
     const res = await fetchWithTimeout(url, RDAP_TIMEOUT_MS);
     if (res.status === 404) {
       return { expiresAt: null, daysRemaining: null, registrar: null, error: "Domain not found in RDAP" };
@@ -192,12 +244,41 @@ function queryWhoisServer(server: string, query: string, timeoutMs: number): Pro
   });
 }
 
+export function parseFlexibleDate(candidate: string): Date | null {
+  const trimmed = candidate.trim();
+  // 1. Try native Date parse (handles ISO 8601, RFC 2822, YYYY-MM-DD, etc.)
+  let d = new Date(trimmed);
+  if (!Number.isNaN(d.getTime())) return d;
+
+  // 2. Try DD.MM.YYYY or DD/MM/YYYY (common in EU ccTLDs e.g. .bg, .de, .fr)
+  const dmyMatch = trimmed.match(/^(\d{1,2})[\.\/](\d{1,2})[\.\/](\d{4})/);
+  if (dmyMatch) {
+    const day = parseInt(dmyMatch[1]!, 10);
+    const month = parseInt(dmyMatch[2]!, 10) - 1;
+    const year = parseInt(dmyMatch[3]!, 10);
+    d = new Date(Date.UTC(year, month, day));
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+
+  // 3. Try YYYY.MM.DD
+  const ymdMatch = trimmed.match(/^(\d{4})[\.](\d{1,2})[\.](\d{1,2})/);
+  if (ymdMatch) {
+    const year = parseInt(ymdMatch[1]!, 10);
+    const month = parseInt(ymdMatch[2]!, 10) - 1;
+    const day = parseInt(ymdMatch[3]!, 10);
+    d = new Date(Date.UTC(year, month, day));
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+
+  return null;
+}
+
 export function extractWhoisExpiry(text: string): { expiresAt: string | null; registrar: string | null } {
   // Permissive pattern: many registrars use different field names for the
   // expiry date. We try the most common variants in order; first parseable
   // match wins.
   const expiryPatterns: RegExp[] = [
-    /(?:registry expiry date|registrar registration expiration date|expires on|expiration date|expiry date|paid-till|expires)\s*[:=]\s*([0-9T:\-\.Z+\s]+)/i,
+    /(?:registry expiry date|registrar registration expiration date|expiration-date|expires on|expiration date|expiry date|renewal date|valid until|paid-till|expires)\s*[:=]\s*([0-9A-Za-zT:\-\.\/Z+\s]+)/i,
   ];
   const registrarPatterns: RegExp[] = [
     /registrar\s*[:=]\s*([^\r\n]+)/i,
@@ -209,8 +290,8 @@ export function extractWhoisExpiry(text: string): { expiresAt: string | null; re
     const m = text.match(p);
     if (m?.[1]) {
       const candidate = m[1].trim();
-      const d = new Date(candidate);
-      if (!Number.isNaN(d.getTime())) {
+      const d = parseFlexibleDate(candidate);
+      if (d) {
         expiresAt = d.toISOString();
         break;
       }
@@ -230,7 +311,8 @@ async function lookupWhoisFallback(hostname: string): Promise<DomainExpiryResult
   // IANA WHOIS server. Querying it with the TLD (e.g. "com") returns the
   // authoritative whois server for that TLD. Querying with a full hostname
   // like "example.com" usually yields no useful referral.
-  const tld = tldOf(hostname);
+  const apex = apexDomainOf(hostname);
+  const tld = tldOf(apex);
   if (!tld) {
     return { expiresAt: null, daysRemaining: null, registrar: null, error: "No TLD" };
   }
@@ -251,7 +333,7 @@ async function lookupWhoisFallback(hostname: string): Promise<DomainExpiryResult
         error: "WHOIS referral target is a private address",
       };
     }
-    const response = await queryWhoisServer(whoisServer, hostname, WHOIS_TIMEOUT_MS);
+    const response = await queryWhoisServer(whoisServer, apex, WHOIS_TIMEOUT_MS);
     const { expiresAt, registrar } = extractWhoisExpiry(response);
     if (!expiresAt) {
       return { expiresAt: null, daysRemaining: null, registrar, error: "No expiry found in WHOIS" };

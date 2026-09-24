@@ -124,7 +124,7 @@ export function checkSSL(
   port = 443,
   opts: CheckOptions = {}
 ): Promise<CheckResult> {
-  const timeoutMs = opts.timeoutMs ?? 10000;
+  const timeoutMs = opts.timeoutMs ?? 5000;
 
   return new Promise((resolve) => {
     let settled = false;

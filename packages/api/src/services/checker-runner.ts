@@ -67,8 +67,10 @@ export async function runCheckForDomain(
   // SSRF guard at the moment of TCP connect. The guard runs in POST
   // /api/domains too, but a hostname that flips from public to private
   // between writes would slip past that. This is the last line of defence.
+  // allowUnresolved: true permits hostnames without active A/AAAA records
+  // to proceed so that RDAP/WHOIS domain-registration lookup can run.
   if (process.env.ALLOW_PRIVATE_HOSTS !== "1") {
-    if (await isPrivateAddress(hostname)) {
+    if (await isPrivateAddress(hostname, { allowUnresolved: true })) {
       throw new PrivateAddressError(hostname);
     }
   }

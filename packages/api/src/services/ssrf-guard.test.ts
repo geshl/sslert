@@ -82,6 +82,12 @@ describe("ssrf-guard — hostname resolution", () => {
     ).toBe(true);
   });
 
+  it("allows a non-resolving hostname when allowUnresolved is true", async () => {
+    expect(
+      await isPrivateAddress("nx.example.invalid", { allowUnresolved: true })
+    ).toBe(false);
+  });
+
   // The DNS-rebinding test below is opt-in: it depends on the test
   // environment having a /etc/hosts entry that points `rebinding-test.invalid`
   // to 127.0.0.1. Skip by default so CI doesn't flap.

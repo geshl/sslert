@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { extractWhoisExpiry } from "./whois.js";
+import { extractWhoisExpiry, apexDomainOf, tldOf, parseFlexibleDate } from "./whois.js";
+
+describe("apexDomainOf & tldOf", () => {
+  it("extracts apex domain for simple TLDs", () => {
+    expect(apexDomainOf("example.com")).toBe("example.com");
+    expect(apexDomainOf("www.example.com")).toBe("example.com");
+    expect(apexDomainOf("sub.mail.example.com")).toBe("example.com");
+  });
+
+  it("extracts apex domain for ccTLDs like .bg and .re", () => {
+    expect(apexDomainOf("example.bg")).toBe("example.bg");
+    expect(apexDomainOf("www.example.bg")).toBe("example.bg");
+    expect(apexDomainOf("test.domain.re")).toBe("domain.re");
+    expect(tldOf("example.bg")).toBe("bg");
+    expect(tldOf("domain.re")).toBe("re");
+  });
+
+  it("extracts apex domain for multipart ccTLDs like .co.uk", () => {
+    expect(apexDomainOf("example.co.uk")).toBe("example.co.uk");
+    expect(apexDomainOf("shop.example.co.uk")).toBe("example.co.uk");
+    expect(tldOf("example.co.uk")).toBe("co.uk");
+  });
+});
 
 describe("extractWhoisExpiry", () => {
   it("parses registry expiry date", () => {
@@ -36,6 +58,38 @@ Domain: example.com
     expect(r.expiresAt).toBe("2025-06-01T00:00:00.000Z");
   });
 
+  it("parses Register.BG expiration date (YYYY-MM-DD)", () => {
+    const text = `
+DOMAIN NAME: example.bg
+registration date: 2020-05-10
+expiration date: 2027-05-10
+status: OK
+`;
+    const r = extractWhoisExpiry(text);
+    expect(r.expiresAt).toContain("2027-05-10");
+  });
+
+  it("parses European DD.MM.YYYY dates", () => {
+    const text = `
+Domain: example.de
+Expiry date: 15.08.2028
+`;
+    const r = extractWhoisExpiry(text);
+    expect(r.expiresAt).toBe(new Date(Date.UTC(2028, 7, 15)).toISOString());
+  });
+
+  it("parses AFNIC .re / .fr Expiry Date", () => {
+    const text = `
+domain: example.re
+status: ACTIVE
+Expiry Date: 2026-11-20T10:15:00Z
+registrar: AFNIC Registrar
+`;
+    const r = extractWhoisExpiry(text);
+    expect(r.expiresAt).toBe("2026-11-20T10:15:00.000Z");
+    expect(r.registrar).toBe("AFNIC Registrar");
+  });
+
   it("returns null when no expiry field is present", () => {
     const r = extractWhoisExpiry("Domain: example.com\nRegistrar: Foo");
     expect(r.expiresAt).toBeNull();
@@ -52,3 +106,4 @@ Domain: example.com
     expect(r.registrar).toBe("MarkMonitor Inc.");
   });
 });
+

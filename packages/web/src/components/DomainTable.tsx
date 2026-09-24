@@ -93,21 +93,27 @@ export function DomainTable({ rows }: { rows: DomainRow[] }) {
                   : "—"}
               </TableCell>
               <TableCell>
-                <StatusBadge daysRemaining={days} />
-                {/* Bug #2 fix (2026-06-23): when the check errored
-                    (revoked / self-signed / untrusted / unreachable)
-                    the StatusBadge above may say "Healthy" because
-                    `daysRemaining` is null. Surface the human-readable
-                    error inline so operators see the problem at a
-                    glance, not just a missing number. */}
+                <StatusBadge daysRemaining={days ?? domainDays} />
                 {lastCheck?.valid === false && lastCheck.error && (
-                  <span
-                    title={certErrorTitle(lastCheck.error)}
-                    className="ml-1 inline-flex items-center gap-1 text-xs text-rose-600"
-                  >
-                    <AlertCircle className="h-3 w-3" />
-                    {certErrorTitle(lastCheck.error)}
-                  </span>
+                  (lastCheck.error === "connection_refused" ||
+                    lastCheck.error === "tls_timeout" ||
+                    lastCheck.error === "dns_not_found") &&
+                  domainDays !== null ? (
+                    <span
+                      title={`No HTTPS service on port ${domain.port}: ${certErrorTitle(lastCheck.error)}`}
+                      className="ml-1 inline-flex items-center gap-1 text-xs text-slate-400"
+                    >
+                      No HTTPS
+                    </span>
+                  ) : (
+                    <span
+                      title={certErrorTitle(lastCheck.error)}
+                      className="ml-1 inline-flex items-center gap-1 text-xs text-rose-600"
+                    >
+                      <AlertCircle className="h-3 w-3" />
+                      {certErrorTitle(lastCheck.error)}
+                    </span>
+                  )
                 )}
               </TableCell>
               <TableCell className="text-right">

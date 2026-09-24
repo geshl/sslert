@@ -83,20 +83,28 @@ export function createDashboardRouter(db: DB = getDb()): Hono {
     ).length;
     const healthy = allDomains.filter(
       (d) =>
-        d.lastCheck?.valid === true &&
-        d.lastCheck?.daysRemaining !== null &&
-        d.lastCheck?.daysRemaining !== undefined &&
-        d.lastCheck.daysRemaining > 30
+        (d.lastCheck?.valid === true &&
+          d.lastCheck?.daysRemaining !== null &&
+          d.lastCheck?.daysRemaining !== undefined &&
+          d.lastCheck.daysRemaining > 30) ||
+        (d.lastCheck?.daysRemaining === null &&
+          d.lastCheck?.domainExpiresDaysRemaining !== null &&
+          d.lastCheck?.domainExpiresDaysRemaining !== undefined &&
+          d.lastCheck.domainExpiresDaysRemaining > 30)
     ).length;
     // `unchecked` = no `checks` row yet (brand-new domain, or the
     // first scheduled run hasn't happened). Different from `invalid`
     // — a row exists but it reports the cert is bad.
     const unchecked = allDomains.filter((d) => !d.lastCheck).length;
     // `invalid` = a check ran, the cert was unparseable / untrusted /
-    // self-signed / hostname-mismatched, etc. `revoked` is a
-    // sub-bucket of `invalid` so the UI can render a specific badge.
+    // self-signed / hostname-mismatched, etc. (and no active domain registration).
+    // `revoked` is a sub-bucket of `invalid` so the UI can render a specific badge.
     const invalid = allDomains.filter(
-      (d) => d.lastCheck && d.lastCheck.valid === false
+      (d) =>
+        d.lastCheck &&
+        d.lastCheck.valid === false &&
+        (d.lastCheck.domainExpiresDaysRemaining === null ||
+          d.lastCheck.domainExpiresDaysRemaining === undefined)
     ).length;
     const revoked = allDomains.filter(
       (d) => d.lastCheck?.error === "cert_revoked"
